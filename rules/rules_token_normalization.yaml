@@ -1,0 +1,180 @@
+token_normalization:
+  meta:
+    version: "1.0"
+    purpose: >
+      Convert messy medicinal properties text into canonical tokens used by BDST rules.
+      Handles spelling variants, hyphenation, phrasing differences, and common typos.
+
+  pipeline:
+    steps:
+      - "casefold: lowercase all text"
+      - "unicode_normalize: NFKC"
+      - "replace_separators: convert '/', ';', ',', '|', '•' to commas"
+      - "strip_punctuation: keep letters, numbers, spaces, hyphens"
+      - "collapse_whitespace: multiple spaces -> single space"
+      - "phrase_match_first: apply multiword phrase rules before single-word tokenization"
+      - "tokenize: split on commas; also split on ' and ' where safe"
+      - "trim_tokens: strip whitespace"
+      - "drop_empty: remove empty tokens"
+      - "apply_synonym_map: map variants -> canonical tokens"
+      - "deduplicate: unique tokens"
+
+  canonical_tokens:
+    # These should match what your BDST rules expect (e.g., appetite_suppressant, cns_stimulant)
+    examples:
+      - mydriatic
+      - appetite_suppressant
+      - appetite_stimulant
+      - narcotic
+      - sedative
+      - hallucinogen
+      - cns_stimulant
+      - hypnotic
+      - emmenagogue
+      - abortifacient
+      - anticoagulant
+      - hypotensive
+      - hypertensive
+
+  phrase_rules:
+    # Apply these BEFORE splitting into individual tokens.
+    # pattern is treated as a case-insensitive substring or regex (your choice in implementation).
+    # canonical is what BDST uses.
+    - pattern: "appetite suppressant"
+      canonical: "appetite_suppressant"
+    - pattern: "appetite suppressants"
+      canonical: "appetite_suppressant"
+    - pattern: "appetite suppresant"
+      canonical: "appetite_suppressant"
+    - pattern: "appetite suppresent"
+      canonical: "appetite_suppressant"
+    - pattern: "appetite supressant"
+      canonical: "appetite_suppressant"
+
+    - pattern: "appetite stimulant"
+      canonical: "appetite_stimulant"
+    - pattern: "appetite stimulants"
+      canonical: "appetite_stimulant"
+
+    - pattern: "cns stimulant"
+      canonical: "cns_stimulant"
+    - pattern: "central nervous system stimulant"
+      canonical: "cns_stimulant"
+    - pattern: "central nervous system stimulants"
+      canonical: "cns_stimulant"
+    - pattern: "nervous system stimulant"
+      canonical: "cns_stimulant"
+
+    - pattern: "cns depressant"
+      canonical: "cns_depressant"
+    - pattern: "central nervous system depressant"
+      canonical: "cns_depressant"
+
+    - pattern: "nervine sedative"
+      canonical: "sedative"
+    - pattern: "mild sedative"
+      canonical: "sedative"
+
+    - pattern: "causes mydriasis"
+      canonical: "mydriatic"
+
+    - pattern: "blood thinner"
+      canonical: "anticoagulant"
+    - pattern: "anti-coagulant"
+      canonical: "anticoagulant"
+    - pattern: "anti coagulant"
+      canonical: "anticoagulant"
+
+    - pattern: "lowers blood pressure"
+      canonical: "hypotensive"
+    - pattern: "raises blood pressure"
+      canonical: "hypertensive"
+
+    - pattern: "induces menstruation"
+      canonical: "emmenagogue"
+    - pattern: "promotes menstruation"
+      canonical: "emmenagogue"
+
+    - pattern: "induces abortion"
+      canonical: "abortifacient"
+    - pattern: "causes abortion"
+      canonical: "abortifacient"
+
+  synonym_map:
+    # Single-token mapping after tokenization/trim.
+    # Left side = observed token variants; right side = canonical token.
+    mydriatic:
+      - "mydriatic"
+      - "mydriatics"
+
+    appetite_suppressant:
+      - "appetite_suppressant"
+      - "appetite suppressor"
+      - "anorectic"
+      - "anoretic"   # common misspelling in messy text
+
+    appetite_stimulant:
+      - "appetite_stimulant"
+      - "appetite enhancer"
+      - "orexigenic"
+      - "orexogenic" # common misspelling
+
+    narcotic:
+      - "narcotic"
+      - "narcotics"
+      - "opioid-like"
+      - "opiate-like"
+
+    sedative:
+      - "sedative"
+      - "sedatives"
+      - "calmative"
+      - "tranquilizer"
+      - "tranquillizer"
+
+    hypnotic:
+      - "hypnotic"
+      - "hypnotics"
+      - "sleep-inducing"
+      - "sleep inducing"
+      - "somniferous"
+
+    hallucinogen:
+      - "hallucinogen"
+      - "hallucinogenic"
+      - "hallucinogens"
+      - "psychedelic"
+      - "psychotropic"   # caution: broad term; keep if your dataset uses it similarly
+
+    cns_stimulant:
+      - "cns_stimulant"
+      - "stimulant"
+      - "stimulants"
+      - "central stimulant"
+      - "cns stimulant"
+
+    cns_depressant:
+      - "cns_depressant"
+      - "depressant"
+      - "depressants"
+      - "central depressant"
+      - "cns depressant"
+
+    emmenagogue:
+      - "emmenagogue"
+      - "emmenagogues"
+
+    abortifacient:
+      - "abortifacient"
+      - "abortifacients"
+
+    anticoagulant:
+      - "anticoagulant"
+      - "anti-coagulant"
+      - "anti coagulant"
+      - "antithrombotic"
+
+    hypotensive:
+      - "hypotensive"
+      - "anti-hypertensive"
+      - "antihypertensive"   # note: often means lowers blood

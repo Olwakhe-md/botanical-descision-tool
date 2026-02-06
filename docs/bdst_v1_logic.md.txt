@@ -1,0 +1,208 @@
+BDST_V1_EVALUATE_PLANT(plant_record):
+
+  # ------------------------------------------------------------
+  # 0) Validate minimal inputs
+  # ------------------------------------------------------------
+  REQUIRE plant_record.scientific_name
+  REQUIRE plant_record.edibility_rating exists OR is null
+  REQUIRE plant_record.medicinal_rating exists OR is null
+  REQUIRE plant_record.medicinal_props_text exists (can be empty string)
+  REQUIRE plant_record.known_hazards_text exists (can be empty string)
+
+  INIT rationale_rules_triggered = empty list
+
+
+  # ------------------------------------------------------------
+  # 1) Normalize ratings into bands
+  # ------------------------------------------------------------
+  edibility_band =
+    IF edibility_rating is null -> E_unknown
+    ELSE IF edibility_rating in [0,1] -> E0
+    ELSE IF edibility_rating in [2,3] -> E1
+    ELSE IF edibility_rating in [4,5] -> E2
+    ELSE -> E_unknown   # defensive fallback
+
+  medicinal_band =
+    IF medicinal_rating is null -> M_unknown
+    ELSE IF medicinal_rating in [0,1] -> M0
+    ELSE IF medicinal_rating in [2,3] -> M1
+    ELSE IF medicinal_rating in [4,5] -> M2
+    ELSE -> M_unknown
+
+  any_rating_unknown = (edibility_band == E_unknown) OR (medicinal_band == M_unknown)
+
+
+  # ------------------------------------------------------------
+  # 2) Quadrant classification (use profile)
+  # ------------------------------------------------------------
+  IF any_rating_unknown:
+      quadrant = Q_unknown
+  ELSE IF edibility_band == E2 AND medicinal_band in [M1, M2]:
+      quadrant = Q1_dual_purpose
+  ELSE IF edibility_band in [E0, E1] AND medicinal_band in [M1, M2]:
+      quadrant = Q2_medicinal_only
+  ELSE IF edibility_band in [E1, E2] AND medicinal_band == M0:
+      quadrant = Q3_food_oriented
+  ELSE IF edibility_band == E0 AND medicinal_band == M0:
+      quadrant = Q4_low_use
+  ELSE:
+      quadrant = Q_unknown   # defensive fallback
+
+
+  # ------------------------------------------------------------
+  # 3) Hazard extraction from known_hazards_text
+  # ------------------------------------------------------------
+  hazard_text_present = (known_hazards_text is not null) AND (trim(known_hazards_text) != "")
+
+  matched_H2_keywords = FIND_KEYWORDS(known_hazards_text, H2_keyword_list)
+  matched_H1_keywords = FIND_KEYWORDS(known_hazards_text, H1_keyword_list)
+
+  IF matched_H2_keywords is not empty:
+      hazard_tier = H2
+  ELSE IF matched_H1_keywords is not empty:
+      hazard_tier = H1
+  ELSE:
+      hazard_tier = H0
+
+  matched_keywords_count = COUNT(matched_H2_keywords) + COUNT(matched_H1_keywords)
+
+  uncategorized_hazard_notes =
+      hazard_text_present AND (matched_keywords_count == 0)
+
+
+  # ------------------------------------------------------------
+  # 4) Medicinal property risk flags
+  # ------------------------------------------------------------
+  props_tokens = NORMALIZE_AND_TOKENIZE(medicinal_props_text)
+    # examples of normalization:
+    # - lowercasing
+    # - trimming whitespace
+    # - mapping synonyms: "appetite suppresent" -> "appetite_suppressant"
+
+  high_risk_hits = INTERSECT(props_tokens, HIGH_RISK_BIOACTIVITIES_SET)
+  moderate_risk_hits = INTERSECT(props_tokens, MODERATE_RISK_BIOACTIVITIES_SET)
+
+  IF high_risk_hits not empty:
+      bioactivity_risk_level = High
+      bioactivity_triggers = high_risk_hits
+  ELSE IF moderate_risk_hits not empty:
+      bioactivity_risk_level = Moderate
+      bioactivity_triggers = moderate_risk_hits
+  ELSE:
+      bioactivity_risk_level = None
+      bioactivity_triggers = empty list
+
+
+  # ------------------------------------------------------------
+  # 5) Base risk from hazard tier
+  # ------------------------------------------------------------
+  IF hazard_tier == H2:
+      risk = RED
+      ADD "base_risk_from_hazards:H2" to rationale_rules_triggered
+  ELSE IF hazard_tier == H1:
+      risk = AMBER
+      ADD "base_risk_from_hazards:H1" to rationale_rules_triggered
+  ELSE:
+      risk = GREEN
+      ADD "base_risk_from_hazards:H0" to rationale_rules_triggered
+
+
+  # ------------------------------------------------------------
+  # 6) Escalations (conservative)
+  # ------------------------------------------------------------
+  # ESC_01: High-risk bioactivity => escalate by one (at least AMBER)
+  IF bioactivity_risk_level == High:
+      risk = ESCALATE_ONE_LEVEL(risk)     # GREEN->AMBER, AMBER->RED, RED->RED
+      risk = MAX(risk, AMBER)
+      ADD "ESC_01_high_risk_bioactivity" to rationale_rules_triggered
+
+  # ESC_02: Medicinal-only + high medicinal rating => escalate by one (at least AMBER)
+  IF quadrant == Q2_medicinal_only AND medicinal_band == M2:
+      risk = ESCALATE_ONE_LEVEL(risk)
+      risk = MAX(risk, AMBER)
+      ADD "ESC_02_medicinal_only_high_medicinal" to rationale_rules_triggered
+
+  # ESC_03: Hazard notes exist but uncategorized => at least AMBER
+  IF uncategorized_hazard_notes:
+      risk = MAX(risk, AMBER)
+      ADD "ESC_03_uncategorized_hazard_notes" to rationale_rules_triggered
+
+  # ESC_04: Missing ratings => at least AMBER
+  IF any_rating_unknown:
+      risk = MAX(risk, AMBER)
+      ADD "ESC_04_missing_ratings_uncertainty" to rationale_rules_triggered
+
+
+  # ------------------------------------------------------------
+  # 7) De-escalation (very conservative)
+  # ------------------------------------------------------------
+  # Never de-escalate RED in v1
+  IF risk != RED:
+      IF risk == AMBER AND
+         hazard_tier == H0 AND
+         bioactivity_risk_level == None AND
+         quadrant in [Q1_dual_purpose, Q3_food_oriented] AND
+         any_rating_unknown == false:
+
+          risk = GREEN
+          ADD "DEESC_01_allow_amber_to_green" to rationale_rules_triggered
+
+
+  # ------------------------------------------------------------
+  # 8) Invariants (must hold)
+  # ------------------------------------------------------------
+  IF hazard_tier == H2:
+      risk = RED
+
+  IF any_rating_unknown:
+      risk = MAX(risk, AMBER)
+
+
+  # ------------------------------------------------------------
+  # 9) Construct BDST plant card output
+  # ------------------------------------------------------------
+  plant_card = {
+    identity: {
+      scientific_name: plant_record.scientific_name,
+      family: plant_record.family (if exists)
+    },
+
+    use_profile: {
+      edibility_rating: plant_record.edibility_rating,
+      edibility_band: edibility_band,
+      medicinal_rating: plant_record.medicinal_rating,
+      medicinal_band: medicinal_band,
+      quadrant: quadrant
+    },
+
+    risk_badge: {
+      bdst_risk_level: risk
+    },
+
+    rationale: {
+      rules_triggered: rationale_rules_triggered
+    },
+
+    hazards: {
+      hazard_text_present: hazard_text_present,
+      hazard_tier: hazard_tier,
+      keyword_matches: {
+        H2: matched_H2_keywords,
+        H1: matched_H1_keywords
+      },
+      hazard_notes_excerpt: EXCERPT(known_hazards_text, max_chars=240)
+    },
+
+    bioactivity_flags: {
+      bioactivity_risk_level: bioactivity_risk_level,
+      triggers: bioactivity_triggers
+    },
+
+    uncertainty_and_disclaimer: [
+      "Non-clinical decision support; not medical advice.",
+      "Absence of hazard warnings is not proof of safety.",
+      "Information is dataset-derived and may be incomplete."
+    ]
+  }
+
+  RETURN plant_card

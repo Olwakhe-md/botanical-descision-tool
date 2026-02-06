@@ -1,0 +1,252 @@
+bdst_v1_acceptance_tests:
+  meta:
+    version: "1.0"
+    description: >
+      Acceptance tests for BDST v1 rule engine.
+      These tests validate risk badge outcomes and key rationale triggers.
+      They use synthetic plant records designed to hit specific logic branches.
+
+  conventions:
+    risk_order: [GREEN, AMBER, RED]
+    escalation_rule_ids:
+      - ESC_01_high_risk_bioactivity
+      - ESC_02_medicinal_only_high_medicinal
+      - ESC_03_uncategorized_hazard_notes
+      - ESC_04_missing_ratings_uncertainty
+    base_risk_tags:
+      - base_risk_from_hazards:H2
+      - base_risk_from_hazards:H1
+      - base_risk_from_hazards:H0
+
+  tests:
+
+    # ------------------------------------------------------------
+    # A) Invariants / Must-always-hold rules
+    # ------------------------------------------------------------
+    - id: A01_H2_always_RED
+      title: "H2 hazard tier forces RED (invariant)"
+      input:
+        scientific_name: "Testus toxicus"
+        edibility_rating: 5
+        medicinal_rating: 1
+        medicinal_props_text: "astringent"
+        known_hazards_text: "Highly toxic; can be fatal."
+        family: "Testaceae"
+      expected:
+        quadrant: "Q3_food_oriented"
+        hazard_tier: "H2"
+        bdst_risk_level: "RED"
+        must_include_rationale:
+          - "base_risk_from_hazards:H2"
+        must_not_include_rationale:
+          - "DEESC_01_allow_amber_to_green"
+
+    - id: A02_unknown_rating_never_GREEN
+      title: "Any unknown rating forces at least AMBER (invariant)"
+      input:
+        scientific_name: "Testus unknownus"
+        edibility_rating: null
+        medicinal_rating: 0
+        medicinal_props_text: ""
+        known_hazards_text: ""
+        family: "Testaceae"
+      expected:
+        quadrant: "Q_unknown"
+        bdst_risk_level: "AMBER"
+        must_include_rationale:
+          - "ESC_04_missing_ratings_uncertainty"
+
+    # ------------------------------------------------------------
+    # B) Base risk from hazard tier
+    # ------------------------------------------------------------
+    - id: B01_H1_base_AMBER
+      title: "H1 hazard keywords produce AMBER base risk"
+      input:
+        scientific_name: "Testus irritans"
+        edibility_rating: 4
+        medicinal_rating: 0
+        medicinal_props_text: ""
+        known_hazards_text: "May cause irritation and nausea."
+        family: "Testaceae"
+      expected:
+        hazard_tier: "H1"
+        bdst_risk_level: "AMBER"
+        must_include_rationale:
+          - "base_risk_from_hazards:H1"
+
+    - id: B02_H0_base_GREEN_when_no_other_escalations
+      title: "No hazard keywords and no risk properties can be GREEN"
+      input:
+        scientific_name: "Testus benignus"
+        edibility_rating: 5
+        medicinal_rating: 0
+        medicinal_props_text: "nutritive"
+        known_hazards_text: ""
+        family: "Testaceae"
+      expected:
+        quadrant: "Q3_food_oriented"
+        hazard_tier: "H0"
+        bdst_risk_level: "GREEN"
+        must_include_rationale:
+          - "base_risk_from_hazards:H0"
+
+    # ------------------------------------------------------------
+    # C) Uncategorized hazard notes escalation
+    # ------------------------------------------------------------
+    - id: C01_uncategorized_hazard_notes_min_AMBER
+      title: "Hazard notes present but uncategorized => at least AMBER"
+      input:
+        scientific_name: "Testus notedus"
+        edibility_rating: 5
+        medicinal_rating: 0
+        medicinal_props_text: ""
+        known_hazards_text: "Use with care in certain situations."  # no tier keywords, but hazard text exists
+        family: "Testaceae"
+      expected:
+        hazard_tier: "H0"
+        uncategorized_hazard_notes: true
+        bdst_risk_level: "AMBER"
+        must_include_rationale:
+          - HZ_UNCATEGORIZED_MIN_AMBER
+
+    # ------------------------------------------------------------
+    # D) High-risk bioactivity escalation
+    # ------------------------------------------------------------
+    - id: D01_mydriatic_min_AMBER_even_without_hazards
+      title: "Mydriatic property forces at least AMBER"
+      input:
+        scientific_name: "Testus mydriaticus"
+        edibility_rating: 5
+        medicinal_rating: 2
+        medicinal_props_text: "mydriatic, tonic"
+        known_hazards_text: ""
+        family: "Testaceae"
+      expected:
+        bioactivity_risk_level: "High"
+        bdst_risk_level: "AMBER"
+        must_include_rationale:
+          - "ESC_01_high_risk_bioactivity"
+
+    - id: D02_high_risk_bioactivity_escalates_AMBER_to_RED
+      title: "High-risk bioactivity escalates AMBER -> RED when base is AMBER"
+      input:
+        scientific_name: "Testus hallucinatus"
+        edibility_rating: 3
+        medicinal_rating: 3
+        medicinal_props_text: "hallucinogen"
+        known_hazards_text: "May cause drowsiness."  # H1 => base AMBER
+        family: "Testaceae"
+      expected:
+        hazard_tier: "H1"
+        base_risk: "AMBER"
+        bdst_risk_level: "RED"
+        must_include_rationale:
+          - "base_risk_from_hazards:H1"
+          - "ESC_01_high_risk_bioactivity"
+
+    # ------------------------------------------------------------
+    # E) Medicinal-only + high medicinal escalation
+    # ------------------------------------------------------------
+    - id: E01_Q2_M2_escalation_min_AMBER
+      title: "Medicinal-only profile + high medicinal rating forces escalation"
+      input:
+        scientific_name: "Testus potentus"
+        edibility_rating: 1
+        medicinal_rating: 5
+        medicinal_props_text: "tonic"
+        known_hazards_text: ""
+        family: "Testaceae"
+      expected:
+        quadrant: "Q2_medicinal_only"
+        hazard_tier: "H0"
+        bdst_risk_level: "AMBER"
+        must_include_rationale:
+          - "ESC_02_medicinal_only_high_medicinal"
+
+    - id: E02_Q2_M2_escalates_AMBER_to_RED_if_already_AMBER
+      title: "If already AMBER, Q2+M2 escalation can push to RED"
+      input:
+        scientific_name: "Testus potentior"
+        edibility_rating: 1
+        medicinal_rating: 5
+        medicinal_props_text: "tonic"
+        known_hazards_text: "May cause nausea."  # H1 => base AMBER
+        family: "Testaceae"
+      expected:
+        quadrant: "Q2_medicinal_only"
+        hazard_tier: "H1"
+        bdst_risk_level: "RED"
+        must_include_rationale:
+          - "base_risk_from_hazards:H1"
+          - "ESC_02_medicinal_only_high_medicinal"
+
+    # ------------------------------------------------------------
+    # F) Conservative de-escalation rule
+    # ------------------------------------------------------------
+    - id: F01_allow_amber_to_green_only_when_clean
+      title: "De-escalate AMBER -> GREEN only when no hazards, no risk bioactivity, known ratings, Q1/Q3"
+      input:
+        scientific_name: "Testus cleanus"
+        edibility_rating: 5
+        medicinal_rating: 0
+        medicinal_props_text: "nutritive"
+        known_hazards_text: ""  # H0
+        family: "Testaceae"
+      expected:
+        quadrant: "Q3_food_oriented"
+        hazard_tier: "H0"
+        bioactivity_risk_level: "None"
+        any_rating_unknown: false
+        bdst_risk_level: "GREEN"
+        must_not_include_rationale:
+          - "ESC_04_missing_ratings_uncertainty"
+
+    - id: F02_never_deescalate_RED
+      title: "RED cannot be de-escalated in v1"
+      input:
+        scientific_name: "Testus redonly"
+        edibility_rating: 5
+        medicinal_rating: 0
+        medicinal_props_text: ""
+        known_hazards_text: "Poisonous."
+        family: "Testaceae"
+      expected:
+        hazard_tier: "H2"
+        bdst_risk_level: "RED"
+        must_not_include_rationale:
+          - "DEESC_01_allow_amber_to_green"
+
+    # ------------------------------------------------------------
+    # G) Normalization-related tests (typos / variants)
+    # ------------------------------------------------------------
+    - id: G01_appetite_suppresent_typo_maps_to_high_risk
+      title: "Typo 'suppresent' normalizes to appetite_suppressant and triggers High risk"
+      input:
+        scientific_name: "Testus typoed"
+        edibility_rating: 4
+        medicinal_rating: 2
+        medicinal_props_text: "appetite suppresent"
+        known_hazards_text: ""
+        family: "Testaceae"
+      expected:
+        normalized_props_must_include:
+          - "appetite_suppressant"
+        bioactivity_risk_level: "High"
+        bdst_risk_level: "AMBER"
+        must_include_rationale:
+          - "ESC_01_high_risk_bioactivity"
+
+    - id: G02_diarrhoea_variant_matches_diarrhea_keyword
+      title: "British spelling 'diarrhoea' matches H1 via hazard normalization"
+      input:
+        scientific_name: "Testus britanicus"
+        edibility_rating: 5
+        medicinal_rating: 0
+        medicinal_props_text: ""
+        known_hazards_text: "May cause diarrhoea."
+        family: "Testaceae"
+      expected:
+        hazard_tier: "H1"
+        bdst_risk_level: "AMBER"
+        must_include_rationale:
+          - "base_risk_from_hazards:H1"

@@ -1,0 +1,205 @@
+hazard_text_normalization:
+  meta:
+    version: "1.0"
+    purpose: >
+      Normalize known_hazards text to improve reliable hazard tier detection.
+      Handles spelling variants, phrasing differences, emphasis language,
+      and documentation-style warnings.
+
+  pipeline:
+    steps:
+      - "casefold: lowercase all text"
+      - "unicode_normalize: NFKC"
+      - "replace_separators: convert '/', ';', '|', '•' to spaces"
+      - "collapse_whitespace: multiple spaces -> single space"
+      - "normalize_hyphenation: 'contra-indicated' -> 'contraindicated'"
+      - "expand_contractions: don't -> do not"
+      - "standardize_warning_phrases"
+      - "strip_nonsemantic_punctuation: keep letters, numbers, spaces"
+      - "retain_sentence_boundaries: optional (for excerpts)"
+
+  phrase_normalization:
+    # Normalize multi-word warning phrases BEFORE keyword matching
+    rules:
+      - pattern: "do not use"
+        canonical: "do_not_use"
+
+      - pattern: "should not be used"
+        canonical: "do_not_use"
+
+      - pattern: "not safe during pregnancy"
+        canonical: "pregnancy_risk"
+
+      - pattern: "unsafe in pregnancy"
+        canonical: "pregnancy_risk"
+
+      - pattern: "avoid during pregnancy"
+        canonical: "pregnancy_risk"
+
+      - pattern: "contra indicated"
+        canonical: "contraindicated"
+
+      - pattern: "contra-indicated"
+        canonical: "contraindicated"
+
+      - pattern: "known to cause cancer"
+        canonical: "carcinogenic"
+
+      - pattern: "cancer causing"
+        canonical: "carcinogenic"
+
+      - pattern: "can be fatal"
+        canonical: "fatal"
+
+      - pattern: "may be fatal"
+        canonical: "fatal"
+
+      - pattern: "highly poisonous"
+        canonical: "poisonous"
+
+      - pattern: "extremely toxic"
+        canonical: "toxic"
+
+      - pattern: "toxic in large doses"
+        canonical: "toxic"
+
+      - pattern: "causes paralysis"
+        canonical: "paralysis"
+
+      - pattern: "can cause paralysis"
+        canonical: "paralysis"
+
+      - pattern: "affects respiration"
+        canonical: "respiratory"
+
+      - pattern: "respiratory depression"
+        canonical: "respiratory"
+
+  spelling_variants:
+    # British / US spelling normalization
+    diarrhoea: diarrhea
+    photosensitisation: photosensitization
+    tumour: tumor
+    foetal: fetal
+    haemorrhage: hemorrhage
+    sulphur: sulfur
+
+  severity_emphasis_mapping:
+    # Words that strengthen severity interpretation
+    high_severity_intensifiers:
+      - severe
+      - extreme
+      - serious
+      - life-threatening
+      - highly
+      - strongly
+
+    moderate_severity_indicators:
+      - may cause
+      - can cause
+      - reported
+      - occasionally
+      - mild
+      - slight
+
+  keyword_canonicalization:
+    # Ensures hazard keywords used by BDST rules match exactly
+    canonical_map:
+      poisonous:
+        - poisonous
+        - poison
+        - poisoned
+        - poisoning
+
+      toxic:
+        - toxic
+        - toxicity
+        - toxicosis
+
+      fatal:
+        - fatal
+        - deadly
+        - death
+
+      carcinogenic:
+        - carcinogenic
+        - carcinogen
+
+      abortifacient:
+        - abortifacient
+        - abortion_inducing
+
+      teratogenic:
+        - teratogenic
+        - teratogen
+
+      paralysis:
+        - paralysis
+        - paralytic
+
+      respiratory:
+        - respiratory
+        - respiration
+        - breathing
+
+      contraindicated:
+        - contraindicated
+        - contraindication
+
+      irritant:
+        - irritant
+        - irritating
+        - irritation
+
+      dermatitis:
+        - dermatitis
+        - skin_inflammation
+
+      nausea:
+        - nausea
+        - nauseous
+
+      vomiting:
+        - vomiting
+        - emesis
+
+      diarrhea:
+        - diarrhea
+        - diarrhoea
+
+      drowsiness:
+        - drowsiness
+        - drowsy
+        - somnolence
+
+      hallucination:
+        - hallucination
+        - hallucinations
+        - hallucinatory
+
+      interaction:
+        - interaction
+        - interacts
+        - drug_interaction
+
+      photosensitive:
+        - photosensitive
+        - photosensitization
+        - photosensitizing
+
+  uncertainty_markers:
+    # Presence of these suggests caution even if no tier keywords match
+    markers:
+      - "not fully studied"
+      - "insufficient data"
+      - "limited information"
+      - "traditionally avoided"
+      - "use with caution"
+      - "safety unclear"
+
+  outputs:
+    fields_produced:
+      - normalized_hazard_text
+      - matched_canonical_keywords
+      - detected_intensifiers
+      - detected_uncertainty_markers

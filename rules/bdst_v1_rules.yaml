@@ -1,0 +1,249 @@
+bdst_v1:
+  meta:
+    name: "Botanical Decision Support Tool"
+    version: "1.0"
+    purpose: >
+      Decision-support for responsible exploration of medicinal plants.
+      Provides context, hazards, and uncertainty. Does not prescribe treatment or dosage.
+    non_negotiables:
+      - "No treatment recommendations"
+      - "No dosage guidance"
+      - "No disease cure claims"
+      - "Always show uncertainty + disclaimer"
+
+  inputs:
+    required_fields:
+      - scientific_name
+      - edibility_rating
+      - medicinal_rating
+      - medicinal_props_text
+      - known_hazards_text
+    optional_fields:
+      - family
+
+  normalization:
+    rating_bands:
+      edibility:
+        E0: {min: 0, max: 1, label: "Low edibility"}
+        E1: {min: 2, max: 3, label: "Moderate edibility"}
+        E2: {min: 4, max: 5, label: "High edibility"}
+        E_unknown: {null_allowed: true, label: "Unknown edibility"}
+      medicinal:
+        M0: {min: 0, max: 1, label: "Low medicinal relevance"}
+        M1: {min: 2, max: 3, label: "Moderate medicinal relevance"}
+        M2: {min: 4, max: 5, label: "High medicinal relevance"}
+        M_unknown: {null_allowed: true, label: "Unknown medicinal relevance"}
+
+  quadrant_classification:
+    description: "Use-profile classification using edible x medicinal bands."
+    quadrants:
+      Q1_dual_purpose:
+        label: "High edible & High medicinal (Dual-purpose)"
+        condition:
+          edibility_band_in: [E2]
+          medicinal_band_in: [M1, M2]
+
+      Q2_medicinal_only:
+        label: "Low edible & High medicinal (Medicinal-only)"
+        condition:
+          edibility_band_in: [E0, E1]
+          medicinal_band_in: [M1, M2]
+
+      Q3_food_oriented:
+        label: "High edible & Low medicinal (Food-oriented)"
+        condition:
+          edibility_band_in: [E1, E2]
+          medicinal_band_in: [M0]
+
+      Q4_low_use:
+        label: "Low edible & Low medicinal (Low-use / Ornamental)"
+        condition:
+          edibility_band_in: [E0]
+          medicinal_band_in: [M0]
+
+      Q_unknown:
+        label: "Unknown / insufficient rating data"
+        condition:
+          any_band_unknown: true
+
+  hazard_extraction:
+    description: >
+      Extract hazard signals from known_hazards_text using keyword matching.
+      IMPORTANT: presence of hazard notes may reflect documentation intensity,
+      but still triggers caution handling.
+    hazard_text_presence:
+      rule: "known_hazards_text is not null and known_hazards_text.strip() != ''"
+
+    tiers:
+      H2_high_severity:
+        label: "High severity hazard signals"
+        keywords:
+          - poison
+          - poisonous
+          - toxic
+          - toxicity
+          - fatal
+          - deadly
+          - carcinogen
+          - carcinogenic
+          - abortifacient
+          - teratogenic
+          - paralysis
+          - respiratory
+          - severe
+          - dangerous
+          - "do not use"
+          - contraindicated
+          - pregnancy
+
+      H1_moderate_severity:
+        label: "Moderate severity hazard signals"
+        keywords:
+          - irritant
+          - irritation
+          - dermatitis
+          - nausea
+          - vomiting
+          - diarrhoea
+          - diarrhea
+          - drowsiness
+          - sedative
+          - hallucination
+          - interaction
+          - photosensitive
+          - photosensitizing
+
+    uncategorized_hazard_notes:
+      description: "Hazard notes exist but no tier keywords matched."
+      condition:
+        hazard_text_present: true
+        matched_keywords_count: 0
+
+  medicinal_property_risk:
+    description: >
+      Flag bioactivities that require extra caution due to CNS/autonomic effects or strong physiological modulation.
+    extraction_note: "medicinal_props_text must be normalized to tokens before matching (casefold, strip, map synonyms)."
+
+    high_risk_bioactivities:
+      level: "High"
+      tokens:
+        - mydriatic
+        - appetite_suppressant
+        - appetite_stimulant
+        - narcotic
+        - sedative
+        - hallucinogen
+        - cns_stimulant
+        - hypnotic
+
+    moderate_risk_bioactivities:
+      level: "Moderate"
+      tokens:
+        - emmenagogue
+        - abortifacient
+        - anticoagulant
+        - hypotensive
+        - hypertensive
+
+  risk_engine:
+    description: "Explainable, conservative risk badge derived from hazards, bioactivity, quadrant, and uncertainty."
+    risk_levels:
+      GREEN: {rank: 0, label: "Low apparent risk (provisional)"}
+      AMBER: {rank: 1, label: "Caution advised"}
+      RED: {rank: 2, label: "High risk / strong caution"}
+
+    base_risk_from_hazards:
+      - if: {hazard_tier: H2_high_severity}
+        set_risk: RED
+        rationale: "High-severity hazard keywords detected in hazard notes."
+      - elif: {hazard_tier: H1_moderate_severity}
+        set_risk: AMBER
+        rationale: "Moderate-severity hazard keywords detected in hazard notes."
+      - else:
+        set_risk: GREEN
+        rationale: "No tiered hazard keywords detected."
+
+    escalations:
+      - id: ESC_01_high_risk_bioactivity
+        if:
+          bioactivity_risk_level: High
+        escalate_by: 1
+        min_risk: AMBER
+        rationale: "High-risk medicinal bioactivity detected (e.g., CNS/autonomic effects)."
+
+      - id: ESC_02_medicinal_only_high_medicinal
+        if:
+          quadrant: Q2_medicinal_only
+          medicinal_band_in: [M2]
+        escalate_by: 1
+        min_risk: AMBER
+        rationale: "Medicinal-only profile + high medicinal rating increases caution requirement."
+
+      - id: ESC_03_uncategorized_hazard_notes
+        if:
+          uncategorized_hazard_notes: true
+        set_min_risk: AMBER
+        rationale: "Hazard notes exist but could not be categorized; uncertainty triggers caution."
+
+      - id: ESC_04_missing_ratings_uncertainty
+        if:
+          any_rating_unknown: true
+        set_min_risk: AMBER
+        rationale: "Missing rating information; uncertainty triggers caution."
+
+    deescalations:
+      description: "Conservative de-escalation; never de-escalate RED in v1."
+      rules:
+        - id: DEESC_01_allow_amber_to_green
+          if:
+            current_risk: AMBER
+            hazard_tier: H0_none_detected
+            bioactivity_risk_level: None
+            quadrant_in: [Q1_dual_purpose, Q3_food_oriented]
+            any_rating_unknown: false
+          set_risk: GREEN
+          rationale: "No hazards, no risk bioactivities, known ratings, and non-medicinal-only profile."
+
+    invariants:
+      - "RED cannot be de-escalated in v1"
+      - "If hazard tier is H2, final risk must be RED"
+      - "If any_rating_unknown is true, final risk cannot be GREEN"
+
+  output_contract:
+    description: "What BDST must return for every plant, regardless of risk level."
+    required_sections:
+      - identity
+      - use_profile
+      - risk_badge
+      - rationale
+      - hazards
+      - bioactivity_flags
+      - uncertainty_and_disclaimer
+
+    identity:
+      fields: [scientific_name, family]
+
+    use_profile:
+      fields: [edibility_rating, edibility_band, medicinal_rating, medicinal_band, quadrant, quadrant_label]
+
+    risk_badge:
+      fields: [bdst_risk_level, risk_label]
+
+    rationale:
+      fields: [risk_rationale_rules_triggered]
+
+    hazards:
+      fields:
+        - hazard_text_present
+        - hazard_tier
+        - hazard_keyword_matches
+        - hazard_notes_excerpt
+
+    bioactivity_flags:
+      fields: [bioactivity_risk_level, bioactivity_triggers]
+
+    uncertainty_and_disclaimer:
+      must_include:
+        - "Non-clinical decision support; not medical advice."
+        - "Absence of hazard warnings is not proof of safety."
+        - "Information is dataset-derived and may be incomplete."

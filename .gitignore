@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Jupyter
+.ipynb_checkpoints
+
+# IDEs
+.vscode/
+.vs/
+.idea/
+
+# Environments
+env/
+venv/
+
+# Data/outputs
+outputs/
+
+# System
+.DS_Store
+Thumbs.db
+
+# dotenv
+.env
